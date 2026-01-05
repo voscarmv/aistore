@@ -1,34 +1,85 @@
 import { DynamicStoreBackend } from '@voscarmv/apigen';
-import { messages } from './schema.js'; // Your Drizzle schema
-import type { Request, Response } from 'express';
+import { messages } from './schema.js';
+import { asc, eq, and, sql } from 'drizzle-orm/sql';
 
-// Create backend instance
 export const BackendDB = new DynamicStoreBackend({
     dbUrl: process.env.DATABASE_URL!,
     port: 3000
 });
 
-// Add a public route
-BackendDB.route({
-    method: 'get',
-    path: '/messages',
-    handler: async (db, req, res) => {
-    const allUsers = await db.select().from(messages);
-    res.json(allUsers);
-}});
-
-// Add a route with auth
-const requireAuth = (req: Request, res: Response, next: () => void): void => {
-    const token = req.headers.authorization;
-    if (!token) { res.status(401).json({ error: 'Unauthorized' }); return }
-    next();
-};
-
 BackendDB.route({
     method: 'post',
     path: '/messages',
-    middlewares: [requireAuth],
     handler: async (db, req, res) => {
-    const newUser = await db.insert(messages).values(req.body).returning();
-    res.json(newUser[0]);
-}});
+        try {
+            const { user_id, queued, msgs } = req.body;
+            const response: { message: string }[] = await db
+                .insert(messages)
+                .values(msgs.map((msg: string) => (
+                    {
+                        user_id,
+                        queued,
+                        message: msg
+                    }
+                )))
+                .returning({ message: messages.message });
+            res.json(response.map(item => item.message));
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    }
+});
+
+BackendDB.route({
+    method: 'get',
+    path: '/messages/:user_id',
+    handler: async (db, req, res) => {
+        try {
+            const response: { message: string }[] = await db
+                .select({ message: messages.message })
+                .from(messages)
+                .where(eq(messages.user_id, req.params.user_id as string))
+                .orderBy(asc(messages.updated_at), asc(messages.id));
+            res.json(response.map(item => item.message));
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    }
+});
+
+BackendDB.route({
+    method: 'get',
+    path: '/messages/:user_id/queued',
+    handler: async (db, req, res) => {
+        try {
+            const response: { message: string }[] = await db
+                .select({ message: messages.message })
+                .from(messages)
+                .where(
+                    and(
+                        eq(messages.queued, true),
+                        eq(messages.user_id, req.params.user_id as string)
+                    ));
+            res.json(response.map(item => item.message));
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    }
+});
+
+BackendDB.route({
+    method: 'put',
+    path: '/messages/:user_id/unqueue',
+    handler: async (db, req, res) => {
+        try {
+            const response: { message: string }[] = await db
+                .update(messages)
+                .set({ queued: false, updated_at: sql`now()` })
+                .where(eq(messages.user_id, req.params.user_id as string))
+                .returning({ message: messages.message });
+            res.json(response.map(item => item.message));
+        } catch (err) {
+            res.status(500).json({ error: String(err) });
+        }
+    }
+});
